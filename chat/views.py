@@ -4,6 +4,9 @@ from .serializers import ChatMessageSerializer, ChatRelationSerializer
 
 
 class ChatMessageViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet для чтения сообщений чата.
+    """
     serializer_class = ChatMessageSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -14,6 +17,9 @@ class ChatMessageViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class ChatRelationViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    ViewSet для чтения отношений между клиентами и менеджерами.
+    """
     serializer_class = ChatRelationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
