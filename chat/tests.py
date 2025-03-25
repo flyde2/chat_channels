@@ -178,6 +178,95 @@ class ChatAPITests(TestCase):
         response = self.api_client.get(url)
         self.assertEqual(response.status_code, 403)
 
+    def test_manager_can_create_relation_api(self):
+        """
+        Проверяем, что менеджер может создать новую связь через POST-запрос.
+        """
+        self.api_client.login(username='manager', password='test12345')
+        url = reverse('relations-list')
+        data = {
+            "manager_id": self.manager.id,
+            "client_id": self.other_client.id
+        }
+        response = self.api_client.post(url, data, format='json')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['manager']['id'], self.manager.id)
+        self.assertEqual(response.data['client']['id'], self.other_client.id)
+
+    def test_client_cannot_create_relation_api(self):
+        """
+        Проверяем, что клиент не может создавать связи.
+        """
+        self.api_client.login(username='client', password='test12345')
+        url = reverse('relations-list')
+        data = {
+            "manager_id": self.manager.id,
+            "client_id": self.client_user.id
+        }
+        response = self.api_client.post(url, data, format='json')
+        self.assertEqual(response.status_code, 403)
+
+    def test_create_relation_missing_fields(self):
+        """
+        Проверяем, что если отсутствуют необходимые поля, сервер возвращает ошибку.
+        """
+        self.api_client.login(username='manager', password='test12345')
+        url = reverse('relations-list')
+        data = {
+            # "manager_id" отсутствует
+            "client_id": self.client_user.id,
+        }
+        response = self.api_client.post(url, data, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_manager_can_update_relation_api(self):
+        """
+        Проверяем, что менеджер может обновить (изменить) существующий чат, например,
+        сменить клиента.
+        """
+        relation = ChatRelation.objects.create(manager=self.manager,
+                                               client=self.client_user)
+        self.api_client.login(username='manager', password='test12345')
+        url = reverse('relations-detail', args=[relation.id])
+        data = {
+            "client_id": self.other_client.id
+        }
+        response = self.api_client.patch(url, data, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['client']['id'], self.other_client.id)
+
+    def test_client_cannot_update_relation_api(self):
+        """
+        Проверяем, что клиент (не менеджер) не может обновлять существующий чат.
+        """
+        self.api_client.login(username='client', password='test12345')
+        url = reverse('relations-detail', args=[self.relation.id])
+        data = {
+            "client": self.other_client.id
+        }
+        response = self.api_client.patch(url, data, format='json')
+        self.assertEqual(response.status_code, 403)
+
+    def test_manager_can_delete_relation_api(self):
+        """
+        Проверяем, что менеджер может удалить чат через API.
+        """
+        relation = ChatRelation.objects.create(manager=self.manager, client=self.client_user)
+        self.api_client.login(username='manager', password='test12345')
+        url = reverse('relations-detail', args=[relation.id])
+        response = self.api_client.delete(url)
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(ChatRelation.objects.filter(id=relation.id).exists())
+
+    def test_client_cannot_delete_relation_api(self):
+        """
+        Проверяем, что клиент не может удалять связь.
+        """
+        self.api_client.login(username='client', password='test12345')
+        url = reverse('relations-detail', args=[self.relation.id])
+        response = self.api_client.delete(url)
+        self.assertEqual(response.status_code, 403)
+
 
 @override_settings(
     CHANNEL_LAYERS={

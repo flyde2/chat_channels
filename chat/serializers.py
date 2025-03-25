@@ -21,7 +21,12 @@ class ChatMessageSerializer(serializers.ModelSerializer):
 class ChatRelationSerializer(serializers.ModelSerializer):
     manager = UserSerializer(read_only=True)
     client = UserSerializer(read_only=True)
+    client_id = serializers.PrimaryKeyRelatedField(
+        source='client',
+        queryset=User.objects.all(),
+        write_only=True
+    )
 
     class Meta:
         model = ChatRelation
-        fields = ['id', 'manager', 'client']
+        fields = ['id', 'manager', 'client', 'client_id']
