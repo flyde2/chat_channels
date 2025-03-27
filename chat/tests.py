@@ -1,5 +1,6 @@
 import asyncio
 
+from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator, ChannelsLiveServerTestCase
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -251,7 +252,8 @@ class ChatAPITests(TestCase):
         """
         Проверяем, что менеджер может удалить чат через API.
         """
-        relation = ChatRelation.objects.create(manager=self.manager, client=self.client_user)
+        relation = ChatRelation.objects.create(manager=self.manager,
+                                               client=self.client_user)
         self.api_client.login(username='manager', password='test12345')
         url = reverse('relations-detail', args=[relation.id])
         response = self.api_client.delete(url)
@@ -403,3 +405,119 @@ class ChatConsumerTests(ChannelsLiveServerTestCase):
         # Отключаемся
         await manager_communicator.disconnect()
         await client_communicator.disconnect()
+
+    async def test_notification_delivery(self):
+        """
+        Тестируем, что при отправке сообщения получатель (client) получает два события:
+        обычное сообщение и отдельное уведомление с ключом "notification": True.
+        """
+        manager_communicator = WebsocketCommunicator(
+            application=application,
+            path=f"/ws/chat/{self.manager.id}/{self.client_user.id}/"
+        )
+        manager_communicator.scope["user"] = self.manager
+
+        client_communicator = WebsocketCommunicator(
+            application=application,
+            path=f"/ws/chat/{self.manager.id}/{self.client_user.id}/"
+        )
+        client_communicator.scope["user"] = self.client_user
+        connected, _ = await manager_communicator.connect()
+        self.assertTrue(connected)
+        connected, _ = await client_communicator.connect()
+        self.assertTrue(connected)
+
+        await manager_communicator.send_json_to(
+            {"message": "Сообщение с уведомлением"})
+
+        responses = []
+        for _ in range(2):
+            responses.append(await client_communicator.receive_json_from())
+
+        notifications = [resp for resp in responses if
+                         resp.get("notification") is True]
+        normal_messages = [resp for resp in responses if
+                           "notification" not in resp]
+
+        self.assertEqual(len(notifications), 1,
+                         "Должно прийти ровно одно уведомление")
+        self.assertEqual(len(normal_messages), 1,
+                         "Должно прийти ровно одно обычное сообщение")
+
+        self.assertEqual(notifications[0]["sender_id"], self.manager.id)
+        self.assertEqual(notifications[0]["message"],
+                         "Сообщение с уведомлением")
+        self.assertEqual(normal_messages[0]["sender_id"], self.manager.id)
+        self.assertEqual(normal_messages[0]["message"],
+                         "Сообщение с уведомлением")
+
+        await manager_communicator.disconnect()
+        await client_communicator.disconnect()
+
+    async def test_manager_receives_notifications_from_multiple_clients(self):
+        """
+        Тестируем, что если у менеджера есть связи с разными клиентами,
+        то при отправке сообщений от разных клиентов менеджер получает уведомления,
+        независимо от того, через какое клиентское соединение они пришли.
+        """
+        # Создаем второго клиента и связь с менеджером через sync_to_async
+        client2 = await sync_to_async(User.objects.create_user)(
+            username='client2',
+            password='test123',
+            is_staff=False
+        )
+        await sync_to_async(ChatRelation.objects.create)(manager=self.manager,
+                                                         client=client2)
+
+        # Менеджер подключается через комнату с первым клиентом, но в connect он также
+        # добавляется в группу уведомлений по идентификатору менеджера.
+        manager_communicator = WebsocketCommunicator(
+            application=application,
+            path=f"/ws/chat/{self.manager.id}/{self.client_user.id}/"
+        )
+        manager_communicator.scope["user"] = self.manager
+        connected, _ = await manager_communicator.connect()
+        self.assertTrue(connected, "Менеджер не смог подключиться к сокету.")
+
+        # Клиент 1 (существующий клиент)
+        client_comm1 = WebsocketCommunicator(
+            application=application,
+            path=f"/ws/chat/{self.manager.id}/{self.client_user.id}/"
+        )
+        client_comm1.scope["user"] = self.client_user
+        connected, _ = await client_comm1.connect()
+        self.assertTrue(connected, "Клиент 1 не смог подключиться к сокету.")
+
+        # Клиент 2 (новый клиент)
+        client_comm2 = WebsocketCommunicator(
+            application=application,
+            path=f"/ws/chat/{self.manager.id}/{client2.id}/"
+        )
+        client_comm2.scope["user"] = client2
+        connected, _ = await client_comm2.connect()
+        self.assertTrue(connected, "Клиент 2 не смог подключиться к сокету.")
+
+        responses = []
+
+        # Клиент 1 отправляет сообщение
+        await client_comm1.send_json_to({"message": "Привет от client1"})
+        # Ждем два события, которые придут менеджеру (одно из комнаты и одно с уведомлением)
+        responses.append(await manager_communicator.receive_json_from())
+
+        await client_comm2.send_json_to({"message": "Привет от client2"})
+        responses.append(await manager_communicator.receive_json_from())
+
+        notifications = [resp for resp in responses if
+                         resp.get("notification") is True]
+        self.assertTrue(len(notifications) >= 1,
+                        "Уведомление от клиента не получено менеджером")
+
+        for resp in responses:
+            if resp.get("sender_id") == self.client_user.id:
+                self.assertEqual(resp.get("message"), "Привет от client1")
+            elif resp.get("sender_id") == client2.id:
+                self.assertEqual(resp.get("message"), "Привет от client2")
+
+        await manager_communicator.disconnect()
+        await client_comm1.disconnect()
+        await client_comm2.disconnect()

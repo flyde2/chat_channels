@@ -16,6 +16,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.manager_id = self.scope['url_route']['kwargs']['manager_id']
         self.client_id = self.scope['url_route']['kwargs']['client_id']
         self.room_group_name = f"chat_{self.manager_id}_{self.client_id}"
+        self.user_notifications_group_name = f"user_{self.scope['user'].id}_notifications"
 
         user = self.scope["user"]
 
@@ -25,6 +26,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if allowed:
             await self.channel_layer.group_add(
                 self.room_group_name,
+                self.channel_name
+            )
+            await self.channel_layer.group_add(
+                self.user_notifications_group_name,
                 self.channel_name
             )
             await self.accept()
@@ -97,12 +102,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message': message,
             }
         )
+        await self.channel_layer.group_send(
+            f"user_{receiver_id}_notifications",
+            {
+                'type': 'new_message_notify',
+                'sender_id': user.id,
+                'message': message,
+            }
+        )
 
     async def chat_message(self, event):
         """
         Метод, вызываемый при отправке сообщения клиенту.
         """
         await self.send(text_data=json.dumps({
+            'sender_id': event['sender_id'],
+            'message': event['message'],
+        }))
+
+    async def new_message_notify(self, event):
+        """
+        Метод для уведомления пользователя,
+        о новом сообщении.
+        """
+        await self.send(text_data=json.dumps({
+            'notification': True,
             'sender_id': event['sender_id'],
             'message': event['message'],
         }))
